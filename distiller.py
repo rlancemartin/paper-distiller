@@ -9,10 +9,10 @@ from langchain.vectorstores import FAISS
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chains.question_answering import load_qa_chain
 
-# Image banner 
+# Image banner for Streamlit app
 st.sidebar.image("Img/sidebar_img.jpeg")
 
-# Get papers
+# Get papers (format as pdfs)
 papers  = [l.split('.')[0] for l in os.listdir("Papers/") if l.endswith('.pdf')]
 selectbox = st.sidebar.radio('Which paper to distill?',papers)
   
@@ -23,11 +23,13 @@ class PaperDistiller:
 
         self.name = paper_name
         self.answers = {}
+        # Use pickledb as local q-a store (save cost)
         self.cached_answers = pickledb.load('distller.db',auto_dump=False,sig=False) 
 
     def split_pdf(self,chunk_chars=4000,overlap=50):
         """
-        Pre-process PDF into chunks 
+        Pre-process PDF into chunks
+        Some code from: https://github.com/whitead/paper-qa/blob/main/paperqa/readers.py
         """
 
         pdfFileObj = open("Papers/%s.pdf"%self.name, "rb")
@@ -45,7 +47,7 @@ class PaperDistiller:
 
     def read_or_create_index(self):
         """
-        Read or generate embeddings
+        Read or generate embeddings for pdf
         """
 
         if os.path.isdir('Index/%s'%self.name):
@@ -54,24 +56,25 @@ class PaperDistiller:
         else:
             print("Creating index!")
             self.ix = FAISS.from_texts(self.split_pdf(), OpenAIEmbeddings())
+            # Save index to local (save cost)
             self.ix.save_local('Index/%s'%self.name)
             
     def query_and_distill(self,query):
         """
-        Query embeddings and pass to LLM for summary answer
+        Query embeddings and pass relevant chunks to LLM for answer
         """
 
-        # Answer in memory
+        # Answer already in memory
         if query in self.answers:
             print("Answer found!")
             return self.answers[query]
-        # Answer cached (asked in the past)
+        # Answer cached (asked in the past) in pickledb
         elif self.cached_answers.get(query+"-%s"%self.name):
             print("Answered in the past!")
             return self.cached_answers.get(query+"-%s"%self.name)
         # Generate the answer 
         else:
-            print("Gemerating answer!")
+            print("Generating answer!")
             query_results = self.ix.similarity_search(query, k=2)
             chain = load_qa_chain(OpenAI(temperature=0.25), chain_type="stuff")
             self.answers[query] = chain.run(input_documents=query_results, question=query)
@@ -84,12 +87,13 @@ class PaperDistiller:
         """
         self.cached_answers.dump()
 
-# Select paper  
+# Select paper via radio button 
 print(selectbox)
 p=PaperDistiller(selectbox)
 p.read_or_create_index()
 
 # Pre-set queries for each paper
+# TO DO: improve this w/ prompt engineering
 queries = ["What is the main innovation or new idea in the paper?",
            "How many tokens or examples are in the training set?",
            "Where is the training set scraped from or obtained and what modalities does it include?",
@@ -105,7 +109,7 @@ st.header("`Paper Distiller`")
 for q,header in zip(queries,headers):
     st.subheader("`%s`"%header)
     st.info("`%s`"%p.query_and_distill(q))
-    # time.sleep(3) # may be needed for OAI API limit
+    # time.sleep(3) # may be needed for OpenAI API limit
 
 # Cache the answers 
 p.cache_answers()
